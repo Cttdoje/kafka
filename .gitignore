@@ -59,3 +59,15 @@ streams/src/generated
 raft/src/generated
 core/src/generated
 metadata/src/generated
+/core/data2/kafka-7797178085101180522/fakeTopic-0/00000000000000000000.index
+/core/data2/kafka-9168689329813640813/test-topic-1/00000000000000000000.index
+/core/data2/kafka-7797178085101180522/fakeTopic-0/00000000000000000000.log
+/core/data2/kafka-9168689329813640813/test-topic-1/00000000000000000000.log
+/core/data2/kafka-7797178085101180522/fakeTopic-0/00000000000000000000.timeindex
+/core/data2/kafka-9168689329813640813/test-topic-1/00000000000000000000.timeindex
+/core/data2/kafka-7797178085101180522/fakeTopic-0/leader-epoch-checkpoint
+/core/data2/kafka-9168689329813640813/test-topic-1/leader-epoch-checkpoint
+/core/data2/kafka-7797178085101180522/log-start-offset-checkpoint
+/core/data2/kafka-9168689329813640813/test-topic-1/partition.metadata
+/core/data2/kafka-7797178085101180522/recovery-point-offset-checkpoint
+/core/data2/kafka-7797178085101180522/replication-offset-checkpoint
