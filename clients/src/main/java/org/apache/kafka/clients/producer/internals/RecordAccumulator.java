@@ -186,17 +186,21 @@ public final class RecordAccumulator {
                                      long maxTimeToBlock,
                                      boolean abortOnNewBatch,
                                      long nowMs) throws InterruptedException {
-        // We keep track of the number of appending thread to make sure we do not miss batches in
-        // abortIncompleteBatches().
+        // 记录正在进行append的线程，每一个线程在进入这个方法都会使这个值自增1  然后在方法结束时再自减1
+        // 通过 abortIncompleteBatches() 方法判断当前进入append线程
+        // Sender的run方法中在退出的时候需要去关闭这些还未完成append方法的线程
         appendsInProgress.incrementAndGet();
         ByteBuffer buffer = null;
         if (headers == null) headers = Record.EMPTY_HEADERS;
         try {
-            // check if we have an in-progress batch
+            //获取当前主题与分区对应的批次队列
+            //多个消息属于一个批次，多个批次属于一个批次队列
+            //每个主题分区有一个批次队列，里面有多个批次，当单个批次超过大小时，会创建新的批次
             Deque<ProducerBatch> dq = getOrCreateDeque(tp);
             synchronized (dq) {
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
+                //往批次中添加消息，若没有添加成功则返回null
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null)
                     return appendResult;
@@ -207,7 +211,9 @@ public final class RecordAccumulator {
                 // Return a result that will cause another call to append.
                 return new RecordAppendResult(null, false, false, true);
             }
-
+            // 比如默认(batch.size)为16KB 当前这条消息只有1KB 那么就分配 16KB作为批次的大小
+            // 而当前消息如果大于(batch.size)比如为48KB，那么就将48KB作为批次的大小
+            // 也就是说当消息太大  而默认的(batch.size)又配置得太小时，一个批次就只能放一条消息，同理，一个批次最少也会放一条消息
             byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, tp.topic(), tp.partition(), maxTimeToBlock);

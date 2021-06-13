@@ -903,9 +903,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     private Future<RecordMetadata> doSend(ProducerRecord<K, V> record, Callback callback) {
         TopicPartition tp = null;
         try {
+            //检查发送线程状态
             throwIfProducerClosed();
             // first make sure the metadata for the topic is available
             long nowMs = time.milliseconds();
+            //获取集群信息
             ClusterAndWaitTime clusterAndWaitTime;
             try {
                 clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), nowMs, maxBlockTimeMs);
@@ -917,6 +919,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             nowMs += clusterAndWaitTime.waitedOnMetadataMs;
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             Cluster cluster = clusterAndWaitTime.cluster;
+            //序列化器 -  进行 key 和 value 序列化
             byte[] serializedKey;
             try {
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
@@ -933,25 +936,32 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer", cce);
             }
+            //分区器 - 进行分区
+            //如果已经选定分区，则直接使用
+            //否则根据key进行分区，若key为空则随机一个数进行hash取模
             int partition = partition(record, serializedKey, serializedValue, cluster);
             tp = new TopicPartition(record.topic(), partition);
 
             setReadOnly(record.headers());
             Header[] headers = record.headers().toArray();
-
+            //此处会估算一下消息序列化后的大小，之所以是估算 因为此处还没有去考虑压缩算法的开销
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
+            // 确保消息序列化后的大小没有超过max.request.size(表示一条消息的最大大小，默认1MB)
+            // 并且没有大于buffer.memory(生产者内存缓冲区的大小，因为消息是要被放到消息累加器中的，并不是马上发送的)
+            // 如果不符合任意一个条件就会抛出异常
             ensureValidRecordSize(serializedSize);
             long timestamp = record.timestamp() == null ? nowMs : record.timestamp();
             if (log.isTraceEnabled()) {
                 log.trace("Attempting to append record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
             }
-            // producer callback will make sure to call both 'callback' and interceptor callback
+            // 注册发送回调函数
             Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
-
+            //事务处理
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
+            //将消息添加到消息累加器
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
@@ -972,11 +982,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             if (transactionManager != null && transactionManager.isTransactional())
                 transactionManager.maybeAddPartitionToTransaction(tp);
-
+            // // 如果返回的结果是消息对应的消息批次已经满了，或者新的消息批次被创建，那么就唤醒IO线程 使其发送累加器中的消息
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
             }
+            //返回一个异步任务
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,

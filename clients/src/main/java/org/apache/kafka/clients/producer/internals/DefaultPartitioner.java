@@ -67,7 +67,7 @@ public class DefaultPartitioner implements Partitioner {
         if (keyBytes == null) {
             return stickyPartitionCache.partition(topic, cluster);
         }
-        // hash the keyBytes to choose a partition
+        //根据key进行hash取模
         return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
     }
 
