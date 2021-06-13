@@ -121,6 +121,8 @@ public class BufferPool {
 
         try {
             // check if we have a free buffer of the right size pooled
+            //检查是否有合适的缓冲区池
+            //poolableSize:batch.size单个批次大小
             if (size == poolableSize && !this.free.isEmpty())
                 return this.free.pollFirst();
 
