@@ -53,6 +53,7 @@ public class Producer extends Thread {
         if (transactionalId != null) {
             props.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
         }
+        props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG,ProducerInterceptorPrefix.class.getName());
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, enableIdempotency);
 
         producer = new KafkaProducer<>(props);
@@ -75,7 +76,7 @@ public class Producer extends Thread {
             long startTime = System.currentTimeMillis();
             if (isAsync) { // Send asynchronously
                 producer.send(new ProducerRecord<>(topic,
-                    messageKey,
+                    null,
                     messageStr), new DemoCallBack(startTime, messageKey, messageStr));
             } else { // Send synchronously
                 try {
