@@ -45,13 +45,16 @@ import org.apache.kafka.common.utils.Time;
 public class BufferPool {
 
     static final String WAIT_TIME_SENSOR_NAME = "bufferpool-wait-time";
-
+    //总内存大小
     private final long totalMemory;
+    //批次大小
     private final int poolableSize;
     private final ReentrantLock lock;
+    //存放大小等于batch.size的大小的ByteBuffer
     private final Deque<ByteBuffer> free;
     private final Deque<Condition> waiters;
     /** Total available memory is the sum of nonPooledAvailableMemory and the number of byte buffers in free * poolableSize.  */
+    //未分配大小的内存空间
     private long nonPooledAvailableMemory;
     private final Metrics metrics;
     private final Time time;
@@ -121,6 +124,8 @@ public class BufferPool {
 
         try {
             // check if we have a free buffer of the right size pooled
+            //检查是否有合适的缓冲区池
+            //poolableSize:batch.size单个批次大小
             if (size == poolableSize && !this.free.isEmpty())
                 return this.free.pollFirst();
 

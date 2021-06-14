@@ -186,17 +186,21 @@ public final class RecordAccumulator {
                                      long maxTimeToBlock,
                                      boolean abortOnNewBatch,
                                      long nowMs) throws InterruptedException {
-        // We keep track of the number of appending thread to make sure we do not miss batches in
-        // abortIncompleteBatches().
+        // 记录正在进行append的线程，每一个线程在进入这个方法都会使这个值自增1  然后在方法结束时再自减1
+        // 通过 abortIncompleteBatches() 方法判断当前进入append线程
+        // Sender的run方法中在退出的时候需要去关闭这些还未完成append方法的线程
         appendsInProgress.incrementAndGet();
         ByteBuffer buffer = null;
         if (headers == null) headers = Record.EMPTY_HEADERS;
         try {
-            // check if we have an in-progress batch
+            //获取当前主题与分区对应的批次队列
+            //多个消息属于一个批次，多个批次属于一个批次队列
+            //每个主题分区有一个批次队列，里面有多个批次，当单个批次超过大小时，会创建新的批次
             Deque<ProducerBatch> dq = getOrCreateDeque(tp);
             synchronized (dq) {
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
+                //往批次中添加消息，若没有添加成功则返回null,会继续往下走新建批次流程
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null)
                     return appendResult;
@@ -207,10 +211,15 @@ public final class RecordAccumulator {
                 // Return a result that will cause another call to append.
                 return new RecordAppendResult(null, false, false, true);
             }
-
+            // 比如默认(batch.size)为16KB 当前这条消息只有1KB 那么就分配 16KB作为批次的大小
+            // 而当前消息如果大于(batch.size)比如为48KB，那么就将48KB作为批次的大小
+            // 也就是说当消息太大  而默认的(batch.size)又配置得太小时，一个批次就只能放一条消息，同理，一个批次最少也会放一条消息
             byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
-            log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, tp.topic(), tp.partition(), maxTimeToBlock);
+            // 按照上面计算出的size作为这个批次的空间大小，生产者可使用的总内存大小取决于buffer.memory大小
+            // 比如说buffer.memory设置为32MB，那我们生产者的就拥有一个大小为32MB的缓冲区，每次为消息分配消息批次的时候，就是用这个缓冲区去分配
+            // 如果此时有一条新消息要发送，并且这个时候也需要创建一个新的消息批次，而刚好这32MB全部分配完(或者说剩下1MB，但是要创建的消息批次大于1MB)，
+            // 那么在allocate方法中会阻塞，如果在max.block.ms时间内还没有可以足够分配的内存，那么就会抛出异常
             buffer = free.allocate(size, maxTimeToBlock);
 
             // Update the current time in case the buffer allocation blocked above.
@@ -219,23 +228,29 @@ public final class RecordAccumulator {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
-
+                //双重锁检查
+                //同时有A和B线程同时创建新批次，A和B线程都执行了上面往批次添加消息失败了
+                //在创建新批次此处有加锁，若A线程已经创建了批次，B线程再进入时就不需要再次创建了
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
                     return appendResult;
                 }
-
+                // MemoryRecordsBuilder的作用就是将消息写入到上面分配的内存中(buffer)
+                // 此处的步骤就是创建一个消息批次，并且将消息加入到消息批次(batch.tryAppend)中，然后返回一个异步FutureRecordMetadata任务回来
+                // FutureRecordMetadata有一个属性为ProduceRequestResult，这个异步任务的get方法就是去获取ProduceRequestResult这个值
+                // 这个值在IO线程发送消息后会去将broker返回的一些信息写入到ProduceRequestResult上
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
                 FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
                         callback, nowMs));
-
+                // 将批次加入到批次队列中
                 dq.addLast(batch);
                 incomplete.add(batch);
 
                 // Don't deallocate this buffer in the finally block as it's being used in the record batch
                 buffer = null;
+                // 返回一个结果对象  对象中的future属性就是上面返回的异步任务
                 return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true, false);
             }
         } finally {
